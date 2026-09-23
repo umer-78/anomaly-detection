@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>anomaly — Interactive Anomaly Detection Demo</title>
+  <meta name="description" content="Generate a synthetic metric with injected faults, run z-score / robust z-score / IQR / EWMA / seasonal residual detectors in the browser, and compare strict vs point-adjusted F1.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232563eb'/><text x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='monospace'>!</text></svg>">
+  <style>
+    :root {
+      --bg: #f6f7f9; --surface: #ffffff; --surface-2: #eef0f4; --border: #dde1e8;
+      --text: #16181d; --muted: #5d6573; --accent: #2563eb; --accent-ink: #ffffff;
+      --good: #15803d; --bad: #b91c1c; --radius: 12px;
+      --shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 4px 16px rgb(16 24 40 / 0.05);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0e1116; --surface: #161a21; --surface-2: #1d222b; --border: #2a303b;
+        --text: #e8eaee; --muted: #9aa3b2; --accent: #60a5fa; --accent-ink: #0b1220;
+        --good: #4ade80; --bad: #f87171; --shadow: none; color-scheme: dark;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+    header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+    header.top h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+    header.top p { margin: 2px 0 0; color: var(--muted); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); min-width: 0; margin-bottom: 16px; }
+    .card h2 { font-size: 15px; margin: 0 0 12px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    input, select, button { font: inherit; color: inherit; }
+    input, select {
+      width: 100%; padding: 9px 11px; border-radius: 9px;
+      border: 1px solid var(--border); background: var(--surface-2); outline: none; min-width: 0;
+    }
+    input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    button {
+      cursor: pointer; border: 1px solid var(--border); background: var(--surface-2);
+      padding: 9px 14px; border-radius: 9px; font-weight: 600;
+    }
+    button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+    .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+    .row > * { flex: 1 1 160px; }
+    .row > button { flex: 0 0 auto; }
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .table-wrap { overflow-x: auto; }
+    footer { margin-top: 32px; color: var(--muted); font-size: 13px; text-align: center; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+    .stat { background: var(--surface-2); border-radius: 8px; padding: 8px 12px; min-width: 100px; flex: 1; }
+    .stat .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat .v { font-family: var(--mono); font-size: 18px; font-weight: 700; }
+    .stat .v.good { color: var(--good); }
+    .stat .v.bad { color: var(--bad); }
+    canvas { width: 100%; height: auto; display: block; border-radius: 8px; background: var(--surface-2); }
+    .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin-top: 8px; color: var(--muted); }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    .chip { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+    .gap-note { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--bad) 10%, transparent); border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent); font-size: 14px; }
+    .gap-note strong { color: var(--bad); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>anomaly</h1>
+        <p>Detect anomalies in metrics — z-score, robust z-score, IQR, EWMA and seasonal residual, with scoring that does not flatter itself.</p>
+      </div>
+      <a href="https://github.com/umer-78/anomaly-detection">Source on GitHub</a>
+    </header>
+
+    <section class="card" aria-labelledby="gen-h">
+      <h2 id="gen-h">Generate a labelled series</h2>
+      <p class="muted" style="margin-top:0">Sixteen weeks of hourly request rate with a daily rhythm, a weekend dip and a slow climb. Four kinds of fault are injected and labelled: spike, dip (outage), level shift, and a variance burst. Tune the knobs and re-run.</p>
+      <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="seed">Seed</label>
+          <input id="seed" type="number" value="20260918" min="1" step="1">
+        </div>
+        <div>
+          <label for="detector">Detector</label>
+          <select id="detector">
+            <option value="seasonal" selected>seasonal residual</option>
+            <option value="zscore">z-score</option>
+            <option value="robust">robust z-score</option>
+            <option value="iqr">iqr</option>
+            <option value="ewma">ewma</option>
+            <option value="random">random (control)</option>
+          </select>
+        </div>
+        <div>
+          <label for="quantile">Threshold quantile <span class="mono" id="qLabel">0.98</span></label>
+          <input id="quantile" type="range" min="0.80" max="0.995" step="0.005" value="0.98">
+        </div>
+        <button class="primary" id="runBtn">Run detector</button>
+      </div>
+      <canvas id="chart" width="920" height="320" role="img" aria-label="Time series with true anomalies and detector flags"></canvas>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--accent)"></span>series</span>
+        <span><span class="dot" style="background:var(--bad)"></span>true anomaly (labelled)</span>
+        <span><span class="dot" style="background:#f59e0b"></span>detector flag</span>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="gap-note" id="gapNote" hidden></div>
+    </section>
+
+    <section class="card" aria-labelledby="det-h">
+      <h2 id="det-h">How each detector scores</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>detector</th><th>idea</th><th>where it fails</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">random</td><td>uniform noise</td><td>everywhere — it is the control</td></tr>
+            <tr><td class="mono">z-score</td><td>distance from the mean in σ</td><td>masking: mean and σ are dragged by the outliers</td></tr>
+            <tr><td class="mono">robust z-score</td><td>distance from the median, scaled by MAD</td><td>still blind to seasonality</td></tr>
+            <tr><td class="mono">iqr</td><td>distance outside the quartiles</td><td>same</td></tr>
+            <tr><td class="mono">ewma</td><td>distance from a moving expectation</td><td>follows a drift, so it will not report one</td></tr>
+            <tr><td class="mono">seasonal residual</td><td>subtract the daily shape, then judge</td><td>needs to know the period</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-bottom:0">The threshold is the chosen quantile of the scores the detector produced on the series — never chosen from the labels. Strict F1 is judged point by point; point-adjusted F1 credits a whole segment from one hit, which is why the random control can look respectable on the adjusted number alone.</p>
+    </section>
+
+    <footer>27 tests · Python 3.10–3.12 · no runtime dependencies · Built by <a href="https://github.com/umer-78">Umer Hashmi</a></footer>
+  </div>
+
+  <script>
+    // === Data generation (ports tools/make_data.py) ===
+    const FAULTS = [
+      ["spike", 640, 5, 3.4], ["dip", 1180, 9, 0.25], ["variance", 1520, 14, 1.0],
+      ["level_shift", 1900, 40, 1.6], ["spike", 2210, 3, 4.1], ["dip", 2560, 6, 0.3],
+    ];
+    const HOURS = 24 * 7 * 16;
+
+    function mulberry32(a) {
+      return function () {
+        let t = (a += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function gauss(rng) {
+      let u = 0, v = 0;
+      while (u === 0) u = rng();
+      while (v === 0) v = rng();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    function buildSeries(seed) {
+      const rng = mulberry32(seed >>> 0);
+      const values = [], labels = [], kinds = [];
+      for (let i = 0; i < HOURS; i++) {
+        const hour = i % 24;
+        const weekday = Math.floor(i / 24) % 7; // start Monday
+        const daily = 1 + 0.45 * Math.sin((2 * Math.PI * (hour - 9)) / 24);
+        const weekend = weekday >= 5 ? 0.62 : 1.0;
+        const trend = 1 + 0.0002 * i;
+        let value = 1800 * daily * weekend * trend;
+        let noise = 0.05, label = 0, kind = "";
+        for (const [fault, begin, length, factor] of FAULTS) {
+          if (begin <= i && i < begin + length) {
+            label = 1; kind = fault;
+            if (fault === "variance") noise = 0.18;
+            else value *= factor;
+          }
+        }
+        value *= 1 + gauss(rng) * noise;
+        values.push(Math.max(value, 0));
+        labels.push(label);
+        kinds.push(kind);
+      }
+      return { values, labels, kinds };
+    }
+
+    // === Detectors (ports src/anomaly/detectors.py) ===
+    const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    function std(xs) {
+      if (xs.length < 2) return 0;
+      const mu = mean(xs);
+      return Math.sqrt(xs.reduce((s, v) => s + (v - mu) ** 2, 0) / (xs.length - 1));
+    }
+    function median(xs) {
+      const o = [...xs].sort((a, b) => a - b);
+      const m = o.length >> 1;
+      return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
+    }
+    const tiny = (scale, mag) => scale <= 1e-9 * Math.max(mag, 1);
+    function scaleOf(devs) {
+      const mag = devs.length ? mean(devs) : 0;
+      const mad = devs.length ? median(devs) : 0;
+      if (!tiny(mad, mag)) return mad;
+      if (!tiny(mag, mag)) return mag;
+      return 0;
+    }
+
+    const detectors = {
+      random: {
+        name: "random",
+        fit(s) { return this; },
+        score(s) { const r = mulberry32(3); return s.map(() => r()); },
+      },
+      zscore: {
+        name: "z-score", mu: 0, sigma: 0,
+        fit(s) { this.mu = mean(s); this.sigma = std(s); return this; },
+        score(s) { if (!this.sigma) return s.map(() => 0); return s.map((v) => Math.abs(v - this.mu) / this.sigma); },
+      },
+      robust: {
+        name: "robust z-score", med: 0, mad: 0,
+        fit(s) { this.med = median(s); this.mad = scaleOf(s.map((v) => Math.abs(v - this.med))); return this; },
+        score(s) { if (!this.mad) return s.map(() => 0); return s.map((v) => Math.abs(v - this.med) * 0.6745 / this.mad); },
+      },
+      iqr: {
+        name: "iqr", q1: 0, q3: 0,
+        fit(s) { const o = [...s].sort((a, b) => a - b); this.q1 = o[Math.floor(o.length / 4)]; this.q3 = o[Math.floor((3 * o.length) / 4)]; return this; },
+        score(s) { const spread = this.q3 - this.q1; if (!spread) return s.map(() => 0); return s.map((v) => Math.max(this.q1 - v, v - this.q3, 0) / spread); },
+      },
+      ewma: {
+        name: "ewma", alpha: 0.1, centre: 0, sigma: 0,
+        residuals(s) { let level = s[0]; return s.map((v) => { const r = v - level; level = this.alpha * v + (1 - this.alpha) * level; return r; }); },
+        fit(s) { const rs = this.residuals(s); this.centre = median(rs); this.sigma = scaleOf(rs.map((r) => Math.abs(r - this.centre))); return this; },
+        score(s) { if (!this.sigma) return s.map(() => 0); return this.residuals(s).map((r) => Math.abs(r - this.centre) / this.sigma); },
+      },
+      seasonal: {
+        name: "seasonal residual", period: 24, profile: [], mad: 0,
+        fit(s) {
+          const p = this.period;
+          this.profile = Array.from({ length: p }, (_, pos) => {
+            const col = []; for (let i = pos; i < s.length; i += p) col.push(s[i]);
+            return median(col);
+          });
+          const rs = s.map((v, i) => v - this.profile[i % p]);
+          const centre = median(rs);
+          this.mad = scaleOf(rs.map((r) => Math.abs(r - centre)));
+          return this;
+        },
+        score(s) {
+          if (!this.mad) return s.map(() => 0);
+          const rs = s.map((v, i) => v - this.profile[i % this.period]);
+          const centre = median(rs);
+          return rs.map((r) => Math.abs(r - centre) * 0.6745 / this.mad);
+        },
+      },
+    };
+
+    // === Metrics (ports src/anomaly/metrics.py) ===
+    function segments(labels) {
+      const runs = []; let start = null;
+      for (let i = 0; i < labels.length; i++) {
+        if (labels[i] && start === null) start = i;
+        else if (!labels[i] && start !== null) { runs.push([start, i]); start = null; }
+      }
+      if (start !== null) runs.push([start, labels.length]);
+      return runs;
+    }
+    function counts(labels, flags) {
+      let tp = 0, fp = 0, fn = 0;
+      for (let i = 0; i < labels.length; i++) {
+        if (labels[i] && flags[i]) tp++;
+        else if (!labels[i] && flags[i]) fp++;
+        else if (labels[i] && !flags[i]) fn++;
+      }
+      const precision = tp + fp ? tp / (tp + fp) : 0;
+      const recall = tp + fn ? tp / (tp + fn) : 0;
+      const f1 = precision + recall ? (2 * precision * recall) / (precision + recall) : 0;
+      return { tp, fp, fn, precision, recall, f1 };
+    }
+    function pointAdjusted(labels, flags) {
+      const adj = flags.slice();
+      for (const [s, e] of segments(labels)) {
+        if (flags.slice(s, e).some(Boolean)) for (let i = s; i < e; i++) adj[i] = 1;
+      }
+      return counts(labels, adj);
+    }
+    function quantile(xs, q) {
+      const o = [...xs].sort((a, b) => a - b);
+      const pos = (o.length - 1) * q;
+      const lo = Math.floor(pos), hi = Math.ceil(pos);
+      return o[lo] + (o[hi] - o[lo]) * (pos - lo);
+    }
+
+    // === UI ===
+    const chart = document.getElementById("chart");
+    const ctx = chart.getContext("2d");
+    const qInput = document.getElementById("quantile");
+    const qLabel = document.getElementById("qLabel");
+    qInput.addEventListener("input", () => { qLabel.textContent = Number(qInput.value).toFixed(3); });
+
+    function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+    function draw(series, flags, labels) {
+      const dpr = window.devicePixelRatio || 1;
+      const w = chart.clientWidth || 920, h = 320;
+      chart.width = w * dpr; chart.height = h * dpr;
+      chart.style.height = h + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      const pad = { l: 48, r: 12, t: 14, b: 28 };
+      const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+      const min = Math.min(...series), max = Math.max(...series);
+      const x = (i) => pad.l + (i / (series.length - 1)) * iw;
+      const y = (v) => pad.t + (1 - (v - min) / (max - min || 1)) * ih;
+
+      const muted = css("--muted"), border = css("--border"), bad = css("--bad"), accent = css("--accent");
+
+      // grid
+      ctx.strokeStyle = border; ctx.fillStyle = muted; ctx.font = "11px ui-monospace, monospace"; ctx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const v = min + ((max - min) * g) / 4;
+        const yy = y(v);
+        ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
+        ctx.textAlign = "right"; ctx.fillText(Math.round(v).toLocaleString(), pad.l - 6, yy + 3);
+      }
+
+      // anomaly bands
+      ctx.fillStyle = bad.replace(")", " / 0.12)").replace("rgb", "rgba").replace("#b91c1c", "rgba(185,28,28,0.12)");
+      ctx.fillStyle = "rgba(185,28,28,0.12)";
+      for (const [s, e] of segments(labels)) {
+        ctx.fillRect(x(s), pad.t, Math.max(x(e - 1) - x(s), 2), ih);
+      }
+
+      // series line
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.beginPath();
+      series.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+      ctx.stroke();
+
+      // true anomalies
+      ctx.fillStyle = bad;
+      labels.forEach((l, i) => { if (l) { ctx.beginPath(); ctx.arc(x(i), y(series[i]), 3, 0, Math.PI * 2); ctx.fill(); } });
+
+      // flags
+      ctx.fillStyle = "#f59e0b";
+      flags.forEach((f, i) => { if (f) { ctx.beginPath(); ctx.arc(x(i), y(series[i]), 3.5, 0, Math.PI * 2); ctx.fill(); } });
+
+      ctx.fillStyle = muted; ctx.textAlign = "left";
+      ctx.fillText("hour 0", pad.l, h - 8);
+      ctx.textAlign = "right"; ctx.fillText("hour " + (series.length - 1), w - pad.r, h - 8);
+    }
+
+    function render() {
+      const seed = Number(document.getElementById("seed").value) || 20260918;
+      const key = document.getElementById("detector").value;
+      const q = Number(qInput.value);
+      const { values, labels } = buildSeries(seed);
+      const det = detectors[key];
+      det.fit(values);
+      const scores = det.score(values);
+      const threshold = quantile(scores, q);
+      const flags = scores.map((s) => (s >= threshold ? 1 : 0));
+
+      const strict = counts(labels, flags);
+      const adj = pointAdjusted(labels, flags);
+      const nFlags = flags.reduce((a, b) => a + b, 0);
+      const nTrue = labels.reduce((a, b) => a + b, 0);
+
+      document.getElementById("stats").innerHTML = `
+        <div class="stat"><div class="k">points</div><div class="v">${values.length.toLocaleString()}</div></div>
+        <div class="stat"><div class="k">true anomalies</div><div class="v">${nTrue}</div></div>
+        <div class="stat"><div class="k">alerts</div><div class="v">${nFlags}</div></div>
+        <div class="stat"><div class="k">strict F1</div><div class="v ${strict.f1 >= 0.4 ? "good" : "bad"}">${strict.f1.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">point-adj F1</div><div class="v">${adj.f1.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">precision / recall</div><div class="v" style="font-size:14px">${strict.precision.toFixed(2)} / ${strict.recall.toFixed(2)}</div></div>
+      `;
+
+      const gap = document.getElementById("gapNote");
+      const ratio = strict.f1 > 0 ? adj.f1 / strict.f1 : adj.f1 > 0 ? Infinity : 0;
+      if (key === "random") {
+        gap.hidden = false;
+        gap.innerHTML = `<strong>Control detector.</strong> Strict F1 ${strict.f1.toFixed(3)} against point-adjusted ${adj.f1.toFixed(3)} — a ${ratio === Infinity ? "∞" : ratio.toFixed(1)}× lift from arithmetic alone. Fire often enough and point adjustment credits every segment you merely graze.`;
+      } else if (adj.f1 - strict.f1 > 0.15) {
+        gap.hidden = false;
+        gap.innerHTML = `<strong>Point adjustment inflates this run.</strong> Strict F1 ${strict.f1.toFixed(3)} becomes ${adj.f1.toFixed(3)} once one hit inside a segment marks the whole segment detected. Always read both.`;
+      } else {
+        gap.hidden = true;
+      }
+
+      draw(values, flags, labels);
+    }
+
+    document.getElementById("runBtn").addEventListener("click", render);
+    ["seed", "detector", "quantile"].forEach((id) => document.getElementById(id).addEventListener("change", render));
+    window.addEventListener("resize", render);
+    render();
+  </script>
+</body>
+</html>
