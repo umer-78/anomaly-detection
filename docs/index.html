@@ -262,6 +262,18 @@
       font-size: 14px; animation: slideIn 0.35s var(--ease) both;
     }
     .gap-note strong { color: var(--bad); }
+    .pad { touch-action: none; cursor: crosshair; background: var(--surface); border: 1.5px dashed var(--border-strong); }
+    .chiprow { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+    .toggles { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 14px; margin: 10px 0; }
+    .toggles label { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; color: var(--text); cursor: pointer; font-weight: 500; }
+    .toggles input { width: auto; }
+    .explain-list { list-style: none; margin: 0; padding: 0; }
+    .explain-list li { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; animation: slideIn 0.35s var(--ease) both; }
+    .explain-list li:last-child { border-bottom: 0; }
+    .explain-list .pt { font-weight: 700; font-family: var(--mono); }
+    .explain-list .why { color: var(--text-secondary); font-family: var(--mono); font-size: 12.5px; margin-top: 3px; line-height: 1.55; }
+    .thr-line { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+    .thr-line input { flex: 1; }
     footer {
       margin-top: 40px; padding-top: 24px;
       border-top: 1px solid var(--border);
@@ -374,6 +386,56 @@
         </table>
       </div>
       <p class="muted" style="margin-bottom:0">The threshold is the chosen quantile of the scores the detector produced on the series — never chosen from the labels. Strict F1 is judged point by point; point-adjusted F1 credits a whole segment from one hit, which is why the random control can look respectable on the adjusted number alone.</p>
+    </section>
+
+    <section class="card" aria-labelledby="draw-h">
+      <h2 id="draw-h"><span class="section-num">03</span> Draw your own series</h2>
+      <p class="muted" style="margin-top:0">Sketch a metric directly on the canvas (drag left to right). Inject labelled spikes, then run any detector on your drawing — the same JS ports of the Python detectors score it.</p>
+      <div class="chiprow">
+        <button id="padClear">Clear pad</button>
+        <button id="padSine">Preset: daily rhythm</button>
+        <button id="padInject" class="primary">Inject 3 anomalies</button>
+        <button id="padUse">Run detector on drawing</button>
+        <button id="padResetSeries">Back to generated series</button>
+      </div>
+      <canvas id="pad" class="pad" width="920" height="220" role="img" aria-label="Drawing pad for a custom time series"></canvas>
+      <p class="muted" id="padStatus" style="margin:8px 0 0;font-size:13px">Pad empty — draw a line or load the preset.</p>
+    </section>
+
+    <section class="card" aria-labelledby="cmpd-h">
+      <h2 id="cmpd-h"><span class="section-num">04</span> Detector comparison dashboard</h2>
+      <p class="muted" style="margin-top:0">Every detector scores the current series; each score series is normalised to its own max so the shapes are comparable. The table runs the real strict/point-adjusted metrics for each detector at the quantile set above.</p>
+      <canvas id="cmpChart" width="920" height="300" role="img" aria-label="Normalised detector score overlay"></canvas>
+      <div class="legend" id="cmpLegend"></div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>detector</th><th class="num">flags</th><th class="num">strict P</th><th class="num">strict R</th><th class="num">strict F1</th><th class="num">point-adj F1</th></tr></thead>
+          <tbody id="cmpBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="thr-h">
+      <h2 id="thr-h"><span class="section-num">05</span> Threshold lab — precision / recall / F1 live</h2>
+      <p class="muted" style="margin-top:0">Drag the threshold along the selected detector's score axis. Flags are recomputed instantly; precision, recall and F1 (both scoring conventions) update in real time. The toggle switches which F1 is headline.</p>
+      <div class="toggles">
+        <strong style="font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em">F1 convention</strong>
+        <label><input type="radio" name="f1mode" value="strict" checked> strict (event-based, point-by-point)</label>
+        <label><input type="radio" name="f1mode" value="adjusted"> point-adjusted</label>
+      </div>
+      <div class="thr-line">
+        <label for="thrSlider" style="margin:0;flex:0 0 auto">threshold</label>
+        <input id="thrSlider" type="range" min="0" max="1" step="0.01" value="0.5">
+        <span class="mono" id="thrVal">0.50</span>
+      </div>
+      <div class="stats" id="thrStats"></div>
+      <div class="finding info" id="f1Explain">
+        <span class="icon">i</span>
+        <div><span class="kind">scoring</span>
+        <div class="detail" id="f1ExplainText"></div></div>
+      </div>
+      <h2 style="font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-top:18px">Why these points were flagged</h2>
+      <ul class="explain-list" id="explainList"></ul>
     </section>
 
     <footer>27 tests · Python 3.10–3.12 · no runtime dependencies · Built by <a href="https://github.com/umer-78">Umer Hashmi</a></footer>
@@ -539,11 +601,19 @@
     const ctx = chart.getContext("2d");
     const qInput = document.getElementById("quantile");
     const qLabel = document.getElementById("qLabel");
-    qInput.addEventListener("input", () => { qLabel.textContent = Number(qInput.value).toFixed(3); });
+    qInput.addEventListener("input", () => { qLabel.textContent = Number(qInput.value).toFixed(3); render(); });
 
     function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
-    function draw(series, flags, labels) {
+    let customSeries = null; // { values, labels } drawn by the user
+    let animT = 0, animStart = 0, animRaf = 0;
+
+    function currentSeries(seed) {
+      if (customSeries) return customSeries;
+      return buildSeries(seed);
+    }
+
+    function draw(series, flags, labels, progress = 1, pulse = 0) {
       const dpr = window.devicePixelRatio || 1;
       const w = chart.clientWidth || 920, h = 320;
       chart.width = w * dpr; chart.height = h * dpr;
@@ -568,46 +638,214 @@
         ctx.textAlign = "right"; ctx.fillText(Math.round(v).toLocaleString(), pad.l - 6, yy + 3);
       }
 
-      // anomaly bands
-      ctx.fillStyle = bad.replace(")", " / 0.12)").replace("rgb", "rgba").replace("#b91c1c", "rgba(185,28,28,0.12)");
+      // anomaly bands (only as far as the animated line has reached)
+      const nShown = Math.max(2, Math.floor(series.length * progress));
       ctx.fillStyle = "rgba(185,28,28,0.12)";
       for (const [s, e] of segments(labels)) {
-        ctx.fillRect(x(s), pad.t, Math.max(x(e - 1) - x(s), 2), ih);
+        if (s >= nShown) continue;
+        ctx.fillRect(x(s), pad.t, Math.max(x(Math.min(e - 1, nShown - 1)) - x(s), 2), ih);
       }
 
-      // series line
+      // series line with animated draw-on
       ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.beginPath();
-      series.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+      for (let i = 0; i < nShown; i++) (i ? ctx.lineTo(x(i), y(series[i])) : ctx.moveTo(x(i), y(series[i])));
       ctx.stroke();
 
       // true anomalies
       ctx.fillStyle = bad;
-      labels.forEach((l, i) => { if (l) { ctx.beginPath(); ctx.arc(x(i), y(series[i]), 3, 0, Math.PI * 2); ctx.fill(); } });
+      labels.forEach((l, i) => { if (l && i < nShown) { ctx.beginPath(); ctx.arc(x(i), y(series[i]), 3, 0, Math.PI * 2); ctx.fill(); } });
 
-      // flags
+      // flags with pulse rings
       ctx.fillStyle = "#f59e0b";
-      flags.forEach((f, i) => { if (f) { ctx.beginPath(); ctx.arc(x(i), y(series[i]), 3.5, 0, Math.PI * 2); ctx.fill(); } });
+      flags.forEach((f, i) => {
+        if (!f || i >= nShown) return;
+        const px = x(i), py = y(series[i]);
+        if (pulse > 0) {
+          ctx.strokeStyle = "rgba(245,158,11,0.7)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(px, py, 3.5 + pulse * 7, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill();
+      });
 
       ctx.fillStyle = muted; ctx.textAlign = "left";
       ctx.fillText("hour 0", pad.l, h - 8);
       ctx.textAlign = "right"; ctx.fillText("hour " + (series.length - 1), w - pad.r, h - 8);
     }
 
-    function render() {
-      const seed = Number(document.getElementById("seed").value) || 20260918;
-      const key = document.getElementById("detector").value;
-      const q = Number(qInput.value);
-      const { values, labels } = buildSeries(seed);
+    function animateChart(series, flags, labels) {
+      cancelAnimationFrame(animRaf);
+      animStart = performance.now();
+      const dur = 550, pulseDur = 1400;
+      function frame(now) {
+        const t = (now - animStart) / dur;
+        const progress = Math.min(1, t < 0 ? 0 : 1 - Math.pow(1 - Math.min(t, 1), 3));
+        const pt = (now - animStart) / pulseDur;
+        const pulse = pt <= 1 ? Math.sin(Math.min(pt, 1) * Math.PI) : 0;
+        draw(series, flags, labels, progress, pulse);
+        if (pt <= 1.05 || progress < 1) animRaf = requestAnimationFrame(frame);
+      }
+      animRaf = requestAnimationFrame(frame);
+    }
+
+    function detectorExplanation(key, det, values, scores, threshold, topIdx) {
+      const i = topIdx;
+      const v = values[i];
+      const s = scores[i];
+      if (key === "zscore") {
+        return `x=${v.toFixed(1)}, μ=${det.mu.toFixed(1)}, σ=${det.sigma.toFixed(1)} → |x−μ|/σ = ${s.toFixed(3)} ≥ threshold ${threshold.toFixed(3)}`;
+      }
+      if (key === "robust") {
+        return `x=${v.toFixed(1)}, median=${det.med.toFixed(1)}, MAD-based scale=${det.mad.toFixed(2)} → 0.6745·|x−med|/scale = ${s.toFixed(3)} ≥ ${threshold.toFixed(3)}`;
+      }
+      if (key === "iqr") {
+        const dist = Math.max(det.q1 - v, v - det.q3, 0);
+        return `x=${v.toFixed(1)}, Q1=${det.q1.toFixed(1)}, Q3=${det.q3.toFixed(1)}, IQR=${(det.q3 - det.q1).toFixed(1)} → outside distance/IQR = ${s.toFixed(3)} ≥ ${threshold.toFixed(3)}`;
+      }
+      if (key === "ewma") {
+        return `x=${v.toFixed(1)}, one-step residual from EWMA(α=${det.alpha}) → |residual−centre|/scale = ${s.toFixed(3)} ≥ ${threshold.toFixed(3)}`;
+      }
+      if (key === "seasonal") {
+        const expected = det.profile[i % det.period];
+        return `x=${v.toFixed(1)}, seasonal profile[hour ${i % det.period}]=${expected.toFixed(1)} → residual z = ${s.toFixed(3)} ≥ ${threshold.toFixed(3)}`;
+      }
+      if (key === "random") {
+        return `control detector: score=${s.toFixed(3)} ≥ ${threshold.toFixed(3)} — no relation to the data`;
+      }
+      return `score=${s.toFixed(3)} ≥ threshold ${threshold.toFixed(3)}`;
+    }
+
+    function runDetectorOn(values, labels, key, q) {
       const det = detectors[key];
       det.fit(values);
       const scores = det.score(values);
       const threshold = quantile(scores, q);
       const flags = scores.map((s) => (s >= threshold ? 1 : 0));
+      return { det, scores, threshold, flags };
+    }
+
+    function renderComparison(values, labels, q) {
+      const keys = ["zscore", "robust", "iqr", "ewma", "seasonal", "random"];
+      const colors = { zscore: "#2563eb", robust: "#8b5cf6", iqr: "#059669", ewma: "#f59e0b", seasonal: "#dc2626", random: "#6b7280" };
+      const runs = {};
+      for (const k of keys) runs[k] = runDetectorOn(values, labels, k, q);
+
+      const cmp = document.getElementById("cmpChart");
+      const cctx = cmp.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const w = cmp.clientWidth || 920, h = 300;
+      cmp.width = w * dpr; cmp.height = h * dpr; cmp.style.height = h + "px";
+      cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      cctx.clearRect(0, 0, w, h);
+      const pad = { l: 40, r: 12, t: 14, b: 28 };
+      const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+      const x = (i) => pad.l + (i / (values.length - 1)) * iw;
+      const y = (v) => pad.t + (1 - v) * ih;
+      const muted = css("--muted"), border = css("--border");
+      cctx.strokeStyle = border; cctx.fillStyle = muted; cctx.font = "11px ui-monospace, monospace"; cctx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const yy = y(g / 4);
+        cctx.beginPath(); cctx.moveTo(pad.l, yy); cctx.lineTo(w - pad.r, yy); cctx.stroke();
+        cctx.textAlign = "right"; cctx.fillText((g / 4).toFixed(2), pad.l - 6, yy + 3);
+      }
+      // true anomaly bands
+      cctx.fillStyle = "rgba(185,28,28,0.10)";
+      for (const [s, e] of segments(labels)) cctx.fillRect(x(s), pad.t, Math.max(x(e - 1) - x(s), 2), ih);
+
+      document.getElementById("cmpLegend").innerHTML = keys.map((k) =>
+        `<span><span class="dot" style="background:${colors[k]}"></span>${detectors[k].name}</span>`).join("") +
+        `<span><span class="dot" style="background:rgba(185,28,28,0.35)"></span>true anomaly</span>`;
+
+      for (const k of keys) {
+        const sc = runs[k].scores;
+        const mx = Math.max(...sc, 1e-9);
+        cctx.strokeStyle = colors[k]; cctx.lineWidth = k === "seasonal" ? 2 : 1.3;
+        cctx.globalAlpha = k === "random" ? 0.55 : 0.9;
+        cctx.beginPath();
+        sc.forEach((v, i) => { const nv = Math.min(v / mx, 1); i ? cctx.lineTo(x(i), y(nv)) : cctx.moveTo(x(i), y(nv)); });
+        cctx.stroke();
+        cctx.globalAlpha = 1;
+      }
+      cctx.fillStyle = muted; cctx.textAlign = "left";
+      cctx.fillText("hour 0", pad.l, h - 8);
+      cctx.textAlign = "right"; cctx.fillText("hour " + (values.length - 1), w - pad.r, h - 8);
+
+      document.getElementById("cmpBody").innerHTML = keys.map((k) => {
+        const { flags } = runs[k];
+        const strict = counts(labels, flags);
+        const adj = pointAdjusted(labels, flags);
+        const nf = flags.reduce((a, b) => a + b, 0);
+        return `<tr>
+          <td>${detectors[k].name}</td>
+          <td class="num">${nf}</td>
+          <td class="num">${strict.precision.toFixed(3)}</td>
+          <td class="num">${strict.recall.toFixed(3)}</td>
+          <td class="num">${strict.f1.toFixed(3)}</td>
+          <td class="num">${adj.f1.toFixed(3)}</td>
+        </tr>`;
+      }).join("");
+      return runs;
+    }
+
+    let thrState = null; // { scores, values, labels, key }
+
+    function updateThresholdLab() {
+      if (!thrState) return;
+      const thr = Number(document.getElementById("thrSlider").value);
+      document.getElementById("thrVal").textContent = thr.toFixed(2);
+      const flags = thrState.scores.map((s) => (s >= thr ? 1 : 0));
+      const strict = counts(thrState.labels, flags);
+      const adj = pointAdjusted(thrState.labels, flags);
+      const mode = document.querySelector('input[name="f1mode"]:checked').value;
+      const headline = mode === "strict" ? strict.f1 : adj.f1;
+      document.getElementById("thrStats").innerHTML = `
+        <div class="stat"><div class="k">alerts</div><div class="v">${flags.reduce((a, b) => a + b, 0)}</div></div>
+        <div class="stat"><div class="k">precision</div><div class="v">${strict.precision.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">recall</div><div class="v">${strict.recall.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">strict F1</div><div class="v ${mode === "strict" ? "accent" : ""}">${strict.f1.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">point-adj F1</div><div class="v ${mode === "adjusted" ? "accent" : ""}">${adj.f1.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">headline (${mode})</div><div class="v ${headline >= 0.5 ? "good" : "bad"}">${headline.toFixed(3)}</div></div>
+      `;
+      document.getElementById("f1ExplainText").innerHTML = mode === "strict"
+        ? `<strong>Strict (event-based) F1</strong> judges every point: a flag counts only if that exact point is a true anomaly. Missed points inside a real segment stay false negatives. This is the honest number — it is what a point-by-point alerting system actually achieves.`
+        : `<strong>Point-adjusted F1</strong> expands any flagged point to its whole true segment before scoring. One hit inside a 9-hour outage marks all 9 hours detected. This inflates scores (a random control can look respectable) — always read it next to strict F1, never alone.`;
+
+      // explanations for top flagged points
+      const top = thrState.scores
+        .map((s, i) => ({ s, i }))
+        .filter((o) => thrState.scores[o.i] >= thr)
+        .sort((a, b) => b.s - a.s)
+        .slice(0, 6);
+      const list = document.getElementById("explainList");
+      if (!top.length) {
+        list.innerHTML = `<li class="muted">No points flagged at this threshold — raise it... wait, lower it.</li>`;
+      } else {
+        list.innerHTML = top.map(({ s, i }, n) => {
+          const isTrue = thrState.labels[i];
+          const why = detectorExplanation(thrState.key, thrState.det, thrState.values, thrState.scores, thr, i);
+          return `<li style="animation-delay:${n * 0.04}s">
+            <span class="pt">hour ${i}</span>
+            <span class="badge ${isTrue ? "ok" : "warn"}" style="margin-left:8px">${isTrue ? "true anomaly" : "false alert"}</span>
+            <span class="badge info" style="margin-left:6px">score ${s.toFixed(3)}</span>
+            <div class="why">${why}</div>
+          </li>`;
+        }).join("");
+      }
+    }
+
+    function render() {
+      const seed = Number(document.getElementById("seed").value) || 20260918;
+      const key = document.getElementById("detector").value;
+      const q = Number(qInput.value);
+      const { values, labels } = currentSeries(seed);
+      const { det, scores, threshold, flags } = runDetectorOn(values, labels, key, q);
 
       const strict = counts(labels, flags);
       const adj = pointAdjusted(labels, flags);
       const nFlags = flags.reduce((a, b) => a + b, 0);
       const nTrue = labels.reduce((a, b) => a + b, 0);
+      const mode = document.querySelector('input[name="f1mode"]:checked').value;
+      const headline = mode === "strict" ? strict.f1 : adj.f1;
 
       document.getElementById("stats").innerHTML = `
         <div class="stat"><div class="k">points</div><div class="v">${values.length.toLocaleString()}</div></div>
@@ -615,6 +853,7 @@
         <div class="stat"><div class="k">alerts</div><div class="v">${nFlags}</div></div>
         <div class="stat"><div class="k">strict F1</div><div class="v ${strict.f1 >= 0.4 ? "good" : "bad"}">${strict.f1.toFixed(3)}</div></div>
         <div class="stat"><div class="k">point-adj F1</div><div class="v">${adj.f1.toFixed(3)}</div></div>
+        <div class="stat"><div class="k">headline (${mode})</div><div class="v accent">${headline.toFixed(3)}</div></div>
         <div class="stat"><div class="k">precision / recall</div><div class="v" style="font-size:14px">${strict.precision.toFixed(2)} / ${strict.recall.toFixed(2)}</div></div>
       `;
 
@@ -630,12 +869,153 @@
         gap.hidden = true;
       }
 
-      draw(values, flags, labels);
+      animateChart(values, flags, labels);
+
+      // threshold lab state
+      const sMin = Math.min(...scores), sMax = Math.max(...scores);
+      const sl = document.getElementById("thrSlider");
+      sl.min = Math.floor(sMin * 100) / 100;
+      sl.max = Math.ceil(sMax * 100) / 100;
+      if (Number(sl.value) < Number(sl.min) || Number(sl.value) > Number(sl.max)) sl.value = threshold.toFixed(2);
+      thrState = { scores, values, labels, key, det };
+      updateThresholdLab();
+
+      renderComparison(values, labels, q);
     }
 
     document.getElementById("runBtn").addEventListener("click", render);
     ["seed", "detector", "quantile"].forEach((id) => document.getElementById(id).addEventListener("change", render));
+    document.getElementById("thrSlider").addEventListener("input", updateThresholdLab);
+    document.querySelectorAll('input[name="f1mode"]').forEach((el) => el.addEventListener("change", () => { render(); }));
     window.addEventListener("resize", render);
+
+    // === Drawing pad ===
+    const pad = document.getElementById("pad");
+    const pctx = pad.getContext("2d");
+    let padValues = [];
+    let padLabels = [];
+    let padDrawing = false;
+
+    const PAD_N = 240;
+    function padSetupCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const w = pad.clientWidth || 920, h = 220;
+      pad.width = w * dpr; pad.height = h * dpr; pad.style.height = h + "px";
+      pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { w, h };
+    }
+
+    function padPaint() {
+      const { w, h } = padSetupCanvas();
+      pctx.clearRect(0, 0, w, h);
+      const pad0 = { l: 40, r: 12, t: 12, b: 24 };
+      const iw = w - pad0.l - pad0.r, ih = h - pad0.t - pad0.b;
+      const VMIN = 0, VMAX = 2400;
+      const x = (i) => pad0.l + (i / (PAD_N - 1)) * iw;
+      const y = (v) => pad0.t + (1 - (v - VMIN) / (VMAX - VMIN)) * ih;
+      pctx.strokeStyle = css("--border"); pctx.fillStyle = css("--muted");
+      pctx.font = "11px ui-monospace, monospace"; pctx.lineWidth = 1;
+      for (let g = 0; g <= 4; g++) {
+        const v = VMIN + ((VMAX - VMIN) * g) / 4;
+        const yy = y(v);
+        pctx.beginPath(); pctx.moveTo(pad0.l, yy); pctx.lineTo(w - pad0.r, yy); pctx.stroke();
+        pctx.textAlign = "right"; pctx.fillText(String(Math.round(v)), pad0.l - 6, yy + 3);
+      }
+      if (padValues.length > 1) {
+        // injected anomaly bands
+        pctx.fillStyle = "rgba(185,28,28,0.14)";
+        for (const [s, e] of segments(padLabels)) {
+          pctx.fillRect(x(s), pad0.t, Math.max(x(e - 1) - x(s), 2), ih);
+        }
+        pctx.strokeStyle = css("--accent"); pctx.lineWidth = 1.8; pctx.beginPath();
+        padValues.forEach((v, i) => (i ? pctx.lineTo(x(i), y(v)) : pctx.moveTo(x(i), y(v))));
+        pctx.stroke();
+        pctx.fillStyle = css("--bad");
+        padLabels.forEach((l, i) => { if (l) { pctx.beginPath(); pctx.arc(x(i), y(padValues[i]), 3.5, 0, Math.PI * 2); pctx.fill(); } });
+      } else {
+        pctx.fillStyle = css("--muted"); pctx.textAlign = "center";
+        pctx.fillText("drag here to draw a time series", w / 2, h / 2);
+      }
+      pctx.fillStyle = css("--muted"); pctx.textAlign = "left";
+      pctx.fillText("t=0", pad0.l, h - 8);
+      pctx.textAlign = "right"; pctx.fillText("t=" + (PAD_N - 1), w - pad0.r, h - 8);
+      document.getElementById("padStatus").textContent = padValues.length
+        ? `${padValues.length} points drawn · ${padLabels.reduce((a, b) => a + b, 0)} labelled anomaly point(s) — press "Run detector on drawing".`
+        : "Pad empty — draw a line or load the preset.";
+    }
+
+    function padIndexFromEvent(e) {
+      const rect = pad.getBoundingClientRect();
+      const pad0 = { l: 40, r: 12 };
+      const iw = rect.width - pad0.l - pad0.r;
+      const px = e.clientX - rect.left - pad0.l;
+      const i = Math.round((px / iw) * (PAD_N - 1));
+      const VMIN = 0, VMAX = 2400;
+      const py = e.clientY - rect.top - 12;
+      const ih = rect.height - 12 - 24;
+      const v = VMIN + (1 - py / ih) * (VMAX - VMIN);
+      return { i: Math.max(0, Math.min(PAD_N - 1, i)), v: Math.max(VMIN, Math.min(VMAX, v)) };
+    }
+
+    function padEnsure() {
+      if (!padValues.length) {
+        padValues = new Array(PAD_N).fill(1200);
+        padLabels = new Array(PAD_N).fill(0);
+      }
+    }
+
+    pad.addEventListener("pointerdown", (e) => {
+      pad.setPointerCapture(e.pointerId);
+      padDrawing = true;
+      padEnsure();
+      const { i, v } = padIndexFromEvent(e);
+      padValues[i] = v; padLabels[i] = 0;
+      padPaint();
+    });
+    pad.addEventListener("pointermove", (e) => {
+      if (!padDrawing) return;
+      const { i, v } = padIndexFromEvent(e);
+      padValues[i] = v; padLabels[i] = 0;
+      padPaint();
+    });
+    pad.addEventListener("pointerup", () => { padDrawing = false; });
+    pad.addEventListener("pointercancel", () => { padDrawing = false; });
+
+    document.getElementById("padClear").addEventListener("click", () => {
+      padValues = []; padLabels = []; padPaint();
+    });
+    document.getElementById("padSine").addEventListener("click", () => {
+      const rng = mulberry32(Date.now() & 0xffff);
+      padValues = Array.from({ length: PAD_N }, (_, i) =>
+        Math.max(0, 1200 * (1 + 0.4 * Math.sin((2 * Math.PI * (i % 24)) / 24)) + gauss(rng) * 60));
+      padLabels = new Array(PAD_N).fill(0);
+      padPaint();
+    });
+    document.getElementById("padInject").addEventListener("click", () => {
+      padEnsure();
+      const rng = mulberry32((Date.now() / 1000) & 0xffff);
+      for (let k = 0; k < 3; k++) {
+        const center = 20 + Math.floor(rng() * (PAD_N - 40));
+        const len = 2 + Math.floor(rng() * 4);
+        const factor = rng() < 0.5 ? 1.9 + rng() : 0.35 - rng() * 0.15;
+        for (let j = center; j < center + len && j < PAD_N; j++) {
+          padValues[j] = Math.max(0, padValues[j] * factor);
+          padLabels[j] = 1;
+        }
+      }
+      padPaint();
+    });
+    document.getElementById("padUse").addEventListener("click", () => {
+      if (padValues.length < 8) { document.getElementById("padStatus").textContent = "Draw at least a few points first (or load the preset)."; return; }
+      customSeries = { values: padValues.slice(), labels: padLabels.slice() };
+      render();
+      document.getElementById("chart").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    document.getElementById("padResetSeries").addEventListener("click", () => {
+      customSeries = null;
+      render();
+    });
+    padPaint();
     render();
   </script>
 </body>
