@@ -1,5 +1,9 @@
 # anomaly
 
+[![CI](https://github.com/umer-78/anomaly-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/umer-78/anomaly-detection/actions/workflows/ci.yml)
+
+**Live demo:** https://umer-78.github.io/anomaly-detection/
+
 Anomaly detection for metrics, in Python with no dependencies: statistical
 detectors, an isolation forest written from scratch, and — the part that matters —
 scoring that does not flatter itself.
