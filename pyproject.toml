@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "anomaly"
+name = "anomaly-detection"
 version = "1.0.0"
-description = "Anomaly detection for metrics: statistical detectors, an isolation forest, and scoring that does not flatter itself."
+description = "Anomaly detection for metrics in Python: statistical detectors, an isolation forest from scratch, and scoring that exposes how much point-adjusted F1 flatters a detector."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Umer Hashmi" }]

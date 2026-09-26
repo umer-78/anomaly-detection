@@ -1,4 +1,4 @@
-# anomaly
+# anomaly: anomaly detection for metrics
 
 [![CI](https://github.com/umer-78/anomaly-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/umer-78/anomaly-detection/actions/workflows/ci.yml)
 
