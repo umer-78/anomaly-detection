@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/umer-78/anomaly-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/umer-78/anomaly-detection/actions/workflows/ci.yml)
 
+[![Anomaly Detection: the live demo](.github/preview.jpg)](https://umer-78.github.io/anomaly-detection/)
+
 **Live demo:** https://umer-78.github.io/anomaly-detection/
 
 Anomaly detection for metrics, in Python with no dependencies: statistical
